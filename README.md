@@ -46,6 +46,13 @@ you're sure they're gone.
   want from the camera's device page.
 - **Event** — object detection (`person`, `car`, … from the detector's
   reported classes) and doorbell presses, usable as automation triggers.
+  Object detection events fire once per class per detection update and carry
+  the detection's `label`, `score`, `zones` and `detection_id`, plus, when the
+  detector provides them, `bounding_box` (`[x, y, width, height]` in pixels of
+  `input_dimensions`), the tracked object's `tracking_id` and whether it is
+  `moving`. When several objects of a class are detected, a moving one is
+  reported before a stationary one (a car driving past rather than one parked
+  in the driveway), then the highest score.
 - **Sensor** — temperature, humidity, battery, illuminance, UV, CO2,
   PM2.5/PM10, VOC, NOx, air quality.
 - **Button** — *Restart* for devices that support rebooting, such as most

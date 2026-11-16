@@ -196,3 +196,117 @@ async def test_multiple_classes_each_fire_an_event(
 
     assert fired == ["person", "car"]
     assert hass.states.get(entity_id).attributes["detection_id"] == "d1"
+
+
+async def test_detection_geometry_and_tracking_attributes(
+    hass, fake_sdk, enable_custom_integrations
+):
+    """The box, frame size, tracked object id and movement reach the event."""
+    await setup_entry(hass)
+    fake_sdk.systemManager.fire_device_event(
+        "cam1",
+        "ObjectDetector",
+        {
+            "detections": [
+                {
+                    "className": "vehicle",
+                    "score": 0.81,
+                    "id": "obj7",
+                    "boundingBox": [1200, 300, 640, 360],
+                    "movement": {"moving": True, "firstSeen": 1, "lastSeen": 2},
+                },
+            ],
+            "inputDimensions": [3840, 2160],
+            "detectionId": "d1",
+            "timestamp": 2,
+        },
+    )
+    await hass.async_block_till_done()
+
+    attributes = hass.states.get(
+        "event.porch_front_door_cam_object_detected"
+    ).attributes
+    assert attributes["event_type"] == "vehicle"
+    assert attributes["tracking_id"] == "obj7"
+    assert attributes["moving"] is True
+    assert attributes["bounding_box"] == [1200, 300, 640, 360]
+    assert attributes["input_dimensions"] == [3840, 2160]
+
+
+async def test_untracked_detection_attributes_are_none(
+    hass, fake_sdk, enable_custom_integrations
+):
+    """Detectors without tracking or boxes leave the new attributes empty."""
+    await setup_entry(hass)
+    fake_sdk.systemManager.fire_device_event(
+        "cam1",
+        "ObjectDetector",
+        {"detections": [{"className": "person", "score": 0.9}], "timestamp": 1},
+    )
+    await hass.async_block_till_done()
+
+    attributes = hass.states.get(
+        "event.porch_front_door_cam_object_detected"
+    ).attributes
+    assert attributes["tracking_id"] is None
+    assert attributes["moving"] is None
+    assert attributes["bounding_box"] is None
+    assert attributes["input_dimensions"] is None
+
+
+async def test_moving_object_represents_its_class(
+    hass, fake_sdk, enable_custom_integrations
+):
+    """A parked car must not hide a car driving past in the same payload."""
+    await setup_entry(hass)
+    fake_sdk.systemManager.fire_device_event(
+        "cam1",
+        "ObjectDetector",
+        {
+            "detections": [
+                {
+                    "className": "vehicle",
+                    "score": 0.95,
+                    "id": "parked",
+                    "movement": {"moving": False, "firstSeen": 1, "lastSeen": 1},
+                },
+                {
+                    "className": "vehicle",
+                    "score": 0.7,
+                    "id": "passing",
+                    "movement": {"moving": True, "firstSeen": 5, "lastSeen": 6},
+                },
+            ],
+            "timestamp": 6,
+        },
+    )
+    await hass.async_block_till_done()
+
+    attributes = hass.states.get(
+        "event.porch_front_door_cam_object_detected"
+    ).attributes
+    assert attributes["tracking_id"] == "passing"
+    assert attributes["score"] == 0.7
+
+
+async def test_highest_score_represents_its_class(
+    hass, fake_sdk, enable_custom_integrations
+):
+    """Without movement data, the most confident detection is reported."""
+    await setup_entry(hass)
+    fake_sdk.systemManager.fire_device_event(
+        "cam1",
+        "ObjectDetector",
+        {
+            "detections": [
+                {"className": "person", "score": 0.6, "id": "a"},
+                {"className": "person", "id": "b"},
+                {"className": "person", "score": 0.9, "id": "c"},
+            ],
+            "timestamp": 1,
+        },
+    )
+    await hass.async_block_till_done()
+
+    state = hass.states.get("event.porch_front_door_cam_object_detected")
+    assert state.attributes["tracking_id"] == "c"

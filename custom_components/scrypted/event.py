@@ -71,6 +71,16 @@ async def async_setup_entry(
     )
 
 
+def _detection_rank(detection: dict) -> tuple[bool, float]:
+    """Sort key for the detection that represents its class in an event.
+
+    A stationary object (a parked car) must not hide a moving one of the same
+    class, so moving or untracked detections come first, then higher scores.
+    """
+    movement = detection.get("movement") or {}
+    return (movement.get("moving") is False, -(detection.get("score") or 0))
+
+
 class ScryptedObjectDetectionEvent(ScryptedDeviceEntity, EventEntity):
     """Fires when the scrypted ObjectDetector reports detections."""
 
@@ -88,16 +98,19 @@ class ScryptedObjectDetectionEvent(ScryptedDeviceEntity, EventEntity):
     def _on_objects_detected(self, data: dict) -> None:
         """Fire one event per detected class."""
         detection_id = data.get("detectionId")
-        seen: set[str] = set()
+        by_class: dict[str, list[dict]] = {}
         for detection in data.get("detections") or []:
             class_name = detection.get("className")
-            if not class_name or class_name == MOTION_CLASS or class_name in seen:
+            if not class_name or class_name == MOTION_CLASS:
                 continue
-            seen.add(class_name)
+            by_class.setdefault(class_name, []).append(detection)
+        for class_name, detections in by_class.items():
             if class_name not in self._attr_event_types:
                 # _trigger_event rejects types outside event_types; learn classes
                 # the detector did not advertise up front.
                 self._attr_event_types = [*self._attr_event_types, class_name]
+            detection = min(detections, key=_detection_rank)
+            movement = detection.get("movement") or {}
             self._trigger_event(
                 class_name,
                 {
@@ -105,6 +118,10 @@ class ScryptedObjectDetectionEvent(ScryptedDeviceEntity, EventEntity):
                     "score": detection.get("score"),
                     "zones": detection.get("zones"),
                     "detection_id": detection_id,
+                    "tracking_id": detection.get("id"),
+                    "moving": movement.get("moving"),
+                    "bounding_box": detection.get("boundingBox"),
+                    "input_dimensions": data.get("inputDimensions"),
                 },
             )
             # EventEntity keeps only the last event, so write per class rather
